@@ -37,7 +37,7 @@ import (
 // It will be removed before the release.
 // TODO(matloob): Remove enabled once we have more confidence on the
 // module index.
-var enabled = godebug.New("goindex").Value() != "0"
+var enabled = godebug.New("#goindex").Value() != "0"
 
 // Module represents and encoded module index file. It is used to
 // do the equivalent of build.Import of packages in the module and answer other
@@ -61,7 +61,7 @@ func moduleHash(modroot string, ismodcache bool) (cache.ActionID, error) {
 		//
 		// Note that this is true even for modules in GOROOT/src: non-release builds
 		// of the Go toolchain may have arbitrary development changes on top of the
-		// commit reported by runtime.Version, or could be completly artificial due
+		// commit reported by runtime.Version, or could be completely artificial due
 		// to lacking a `git` binary (like "devel gomote.XXXXX", as synthesized by
 		// "gomote push" as of 2022-06-15). (Release builds shouldn't have
 		// modifications, but we don't want to use a behavior for releases that we
@@ -160,7 +160,7 @@ func GetModule(modroot string) (*Module, error) {
 		return nil, errNotFromModuleCache
 	}
 	modroot = filepath.Clean(modroot)
-	if !str.HasFilePathPrefix(modroot, cfg.GOMODCACHE) {
+	if str.HasFilePathPrefix(modroot, cfg.GOROOTsrc) || !str.HasFilePathPrefix(modroot, cfg.GOMODCACHE) {
 		return nil, errNotFromModuleCache
 	}
 	return openIndexModule(modroot, true)
@@ -178,7 +178,7 @@ func openIndexModule(modroot string, ismodcache bool) (*Module, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, _, err := cache.Default().GetMmap(id)
+		data, _, err := cache.GetMmap(cache.Default(), id)
 		if err != nil {
 			// Couldn't read from modindex. Assume we couldn't read from
 			// the index because the module hasn't been indexed yet.
@@ -186,7 +186,7 @@ func openIndexModule(modroot string, ismodcache bool) (*Module, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err = cache.Default().PutBytes(id, data); err != nil {
+			if err = cache.PutBytes(cache.Default(), id, data); err != nil {
 				return nil, err
 			}
 		}
@@ -207,12 +207,12 @@ func openIndexPackage(modroot, pkgdir string) (*IndexPackage, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, _, err := cache.Default().GetMmap(id)
+		data, _, err := cache.GetMmap(cache.Default(), id)
 		if err != nil {
 			// Couldn't read from index. Assume we couldn't read from
 			// the index because the package hasn't been indexed yet.
 			data = indexPackage(modroot, pkgdir)
-			if err = cache.Default().PutBytes(id, data); err != nil {
+			if err = cache.PutBytes(cache.Default(), id, data); err != nil {
 				return nil, err
 			}
 		}
@@ -580,6 +580,7 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 
 		var fileList *[]string
 		var importMap, embedMap map[string][]token.Position
+		var directives *[]build.Directive
 		switch {
 		case isCgo:
 			allTags["cgo"] = true
@@ -587,6 +588,7 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 				fileList = &p.CgoFiles
 				importMap = importPos
 				embedMap = embedPos
+				directives = &p.Directives
 			} else {
 				// Ignore Imports and Embeds from cgo files if cgo is disabled.
 				fileList = &p.IgnoredGoFiles
@@ -595,14 +597,17 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 			fileList = &p.XTestGoFiles
 			importMap = xTestImportPos
 			embedMap = xTestEmbedPos
+			directives = &p.XTestDirectives
 		case isTest:
 			fileList = &p.TestGoFiles
 			importMap = testImportPos
 			embedMap = testEmbedPos
+			directives = &p.TestDirectives
 		default:
 			fileList = &p.GoFiles
 			importMap = importPos
 			embedMap = embedPos
+			directives = &p.Directives
 		}
 		*fileList = append(*fileList, name)
 		if importMap != nil {
@@ -614,6 +619,9 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 			for _, e := range tf.embeds() {
 				embedMap[e.pattern] = append(embedMap[e.pattern], e.position)
 			}
+		}
+		if directives != nil {
+			*directives = append(*directives, tf.directives()...)
 		}
 	}
 
@@ -902,6 +910,13 @@ func (sf *sourceFile) embedsOffset() int {
 	return pos + 4 + n*(4*5)
 }
 
+func (sf *sourceFile) directivesOffset() int {
+	pos := sf.embedsOffset()
+	n := sf.d.intAt(pos)
+	// each embed is 5 uint32s (string + tokpos)
+	return pos + 4 + n*(4*5)
+}
+
 func (sf *sourceFile) imports() []rawImport {
 	sf.onceReadImports.Do(func() {
 		importsOffset := sf.importsOffset()
@@ -923,6 +938,17 @@ func (sf *sourceFile) embeds() []embed {
 	ret := make([]embed, numEmbeds)
 	for i := range ret {
 		ret[i] = embed{r.string(), r.tokpos()}
+	}
+	return ret
+}
+
+func (sf *sourceFile) directives() []build.Directive {
+	directivesOffset := sf.directivesOffset()
+	r := sf.d.readAt(directivesOffset)
+	numDirectives := r.int()
+	ret := make([]build.Directive, numDirectives)
+	for i := range ret {
+		ret[i] = build.Directive{Text: r.string(), Pos: r.tokpos()}
 	}
 	return ret
 }

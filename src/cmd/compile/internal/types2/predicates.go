@@ -6,6 +6,9 @@
 
 package types2
 
+// isValid reports whether t is a valid type.
+func isValid(t Type) bool { return Unalias(t) != Typ[Invalid] }
+
 // The isX predicates below report whether t is an X.
 // If t is a type parameter the result is false; i.e.,
 // these predicates don't look inside a type parameter.
@@ -47,7 +50,7 @@ func allNumericOrString(t Type) bool { return allBasic(t, IsNumeric|IsString) }
 // for all specific types of the type parameter's type set.
 // allBasic(t, info) is an optimized version of isBasic(coreType(t), info).
 func allBasic(t Type, info BasicInfo) bool {
-	if tpar, _ := t.(*TypeParam); tpar != nil {
+	if tpar, _ := Unalias(t).(*TypeParam); tpar != nil {
 		return tpar.is(func(t *term) bool { return t != nil && isBasic(t.typ, info) })
 	}
 	return isBasic(t, info)
@@ -57,19 +60,32 @@ func allBasic(t Type, info BasicInfo) bool {
 // predeclared types, defined types, and type parameters.
 // hasName may be called with types that are not fully set up.
 func hasName(t Type) bool {
-	switch t.(type) {
+	switch Unalias(t).(type) {
 	case *Basic, *Named, *TypeParam:
 		return true
 	}
 	return false
 }
 
+// isTypeLit reports whether t is a type literal.
+// This includes all non-defined types, but also basic types.
+// isTypeLit may be called with types that are not fully set up.
+func isTypeLit(t Type) bool {
+	switch Unalias(t).(type) {
+	case *Named, *TypeParam:
+		return false
+	}
+	return true
+}
+
 // isTyped reports whether t is typed; i.e., not an untyped
 // constant or boolean. isTyped may be called with types that
 // are not fully set up.
 func isTyped(t Type) bool {
-	// isTyped is called with types that are not fully
-	// set up. Must not call under()!
+	// Alias or Named types cannot denote untyped types,
+	// thus we don't need to call Unalias or under
+	// (which would be unsafe to do for types that are
+	// not fully set up).
 	b, _ := t.(*Basic)
 	return b == nil || b.info&IsUntyped == 0
 }
@@ -92,7 +108,7 @@ func isNonTypeParamInterface(t Type) bool {
 
 // isTypeParam reports whether t is a type parameter.
 func isTypeParam(t Type) bool {
-	_, ok := t.(*TypeParam)
+	_, ok := Unalias(t).(*TypeParam)
 	return ok
 }
 
@@ -101,7 +117,7 @@ func isTypeParam(t Type) bool {
 // use anywhere, but it may report a false negative if the type set has not been
 // computed yet.
 func hasEmptyTypeset(t Type) bool {
-	if tpar, _ := t.(*TypeParam); tpar != nil && tpar.bound != nil {
+	if tpar, _ := Unalias(t).(*TypeParam); tpar != nil && tpar.bound != nil {
 		iface, _ := safeUnderlying(tpar.bound).(*Interface)
 		return iface != nil && iface.tset != nil && iface.tset.IsEmpty()
 	}
@@ -113,7 +129,7 @@ func hasEmptyTypeset(t Type) bool {
 // TODO(gri) should we include signatures or assert that they are not present?
 func isGeneric(t Type) bool {
 	// A parameterized type is only generic if it doesn't have an instantiation already.
-	named, _ := t.(*Named)
+	named := asNamed(t)
 	return named != nil && named.obj != nil && named.inst == nil && named.TypeParams().Len() > 0
 }
 
@@ -207,11 +223,14 @@ type comparer struct {
 
 // For changes to this code the corresponding changes should be made to unifier.nify.
 func (c *comparer) identical(x, y Type, p *ifacePair) bool {
+	x = Unalias(x)
+	y = Unalias(y)
+
 	if x == y {
 		return true
 	}
 
-	if c.ignoreInvalids && (x == Typ[Invalid] || y == Typ[Invalid]) {
+	if c.ignoreInvalids && (!isValid(x) || !isValid(y)) {
 		return true
 	}
 
@@ -422,33 +441,23 @@ func (c *comparer) identical(x, y Type, p *ifacePair) bool {
 
 	case *Named:
 		// Two named types are identical if their type names originate
-		// in the same type declaration.
-		if y, ok := y.(*Named); ok {
+		// in the same type declaration; if they are instantiated they
+		// must have identical type argument lists.
+		if y := asNamed(y); y != nil {
+			// check type arguments before origins to match unifier
+			// (for correct source code we need to do all checks so
+			// order doesn't matter)
 			xargs := x.TypeArgs().list()
 			yargs := y.TypeArgs().list()
-
 			if len(xargs) != len(yargs) {
 				return false
 			}
-
-			if len(xargs) > 0 {
-				// Instances are identical if their original type and type arguments
-				// are identical.
-				if !Identical(x.Origin(), y.Origin()) {
+			for i, xarg := range xargs {
+				if !Identical(xarg, yargs[i]) {
 					return false
 				}
-				for i, xa := range xargs {
-					if !Identical(xa, yargs[i]) {
-						return false
-					}
-				}
-				return true
 			}
-
-			// TODO(gri) Why is x == y not sufficient? And if it is,
-			//           we can just return false here because x == y
-			//           is caught in the very beginning of this function.
-			return x.obj == y.obj
+			return identicalOrigin(x, y)
 		}
 
 	case *TypeParam:
@@ -462,6 +471,12 @@ func (c *comparer) identical(x, y Type, p *ifacePair) bool {
 	}
 
 	return false
+}
+
+// identicalOrigin reports whether x and y originated in the same declaration.
+func identicalOrigin(x, y *Named) bool {
+	// TODO(gri) is this correct?
+	return x.Origin().obj == y.Origin().obj
 }
 
 // identicalInstance reports if two type instantiations are identical.
@@ -485,7 +500,7 @@ func identicalInstance(xorig Type, xargs []Type, yorig Type, yargs []Type) bool 
 // it returns the incoming type for all other types. The default type
 // for untyped nil is untyped nil.
 func Default(t Type) Type {
-	if t, ok := t.(*Basic); ok {
+	if t, ok := Unalias(t).(*Basic); ok {
 		switch t.kind {
 		case UntypedBool:
 			return Typ[Bool]
@@ -502,4 +517,30 @@ func Default(t Type) Type {
 		}
 	}
 	return t
+}
+
+// maxType returns the "largest" type that encompasses both x and y.
+// If x and y are different untyped numeric types, the result is the type of x or y
+// that appears later in this list: integer, rune, floating-point, complex.
+// Otherwise, if x != y, the result is nil.
+func maxType(x, y Type) Type {
+	// We only care about untyped types (for now), so == is good enough.
+	// TODO(gri) investigate generalizing this function to simplify code elsewhere
+	if x == y {
+		return x
+	}
+	if isUntyped(x) && isUntyped(y) && isNumeric(x) && isNumeric(y) {
+		// untyped types are basic types
+		if x.(*Basic).kind > y.(*Basic).kind {
+			return x
+		}
+		return y
+	}
+	return nil
+}
+
+// clone makes a "flat copy" of *p and returns a pointer to the copy.
+func clone[P *T, T any](p P) P {
+	c := *p
+	return &c
 }

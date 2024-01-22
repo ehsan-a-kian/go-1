@@ -200,12 +200,22 @@ var mulRangesZ = []struct {
 			"638952175999932299156089414639761565182862536979208272237582" +
 			"511852109168640000000000000000000000", // -99!
 	},
+
+	// overflow situations
+	{math.MaxInt64 - 0, math.MaxInt64, "9223372036854775807"},
+	{math.MaxInt64 - 1, math.MaxInt64, "85070591730234615838173535747377725442"},
+	{math.MaxInt64 - 2, math.MaxInt64, "784637716923335094969050127519550606919189611815754530810"},
+	{math.MaxInt64 - 3, math.MaxInt64, "7237005577332262206126809393809643289012107973151163787181513908099760521240"},
 }
 
 func TestMulRangeZ(t *testing.T) {
 	var tmp Int
 	// test entirely positive ranges
 	for i, r := range mulRangesN {
+		// skip mulRangesN entries that overflow int64
+		if int64(r.a) < 0 || int64(r.b) < 0 {
+			continue
+		}
 		prod := tmp.MulRange(int64(r.a), int64(r.b)).String()
 		if prod != r.prod {
 			t.Errorf("#%da: got %s; want %s", i, prod, r.prod)
@@ -254,7 +264,7 @@ func TestBinomial(t *testing.T) {
 
 func BenchmarkBinomial(b *testing.B) {
 	var z Int
-	for i := b.N - 1; i >= 0; i-- {
+	for i := 0; i < b.N; i++ {
 		z.Binomial(1000, 990)
 	}
 }
@@ -1425,7 +1435,6 @@ func BenchmarkBitset(b *testing.B) {
 	z := new(Int)
 	z.SetBit(z, 512, 1)
 	b.ResetTimer()
-	b.StartTimer()
 	for i := b.N - 1; i >= 0; i-- {
 		z.SetBit(z, i&512, 1)
 	}
@@ -1435,7 +1444,6 @@ func BenchmarkBitsetNeg(b *testing.B) {
 	z := NewInt(-1)
 	z.SetBit(z, 512, 0)
 	b.ResetTimer()
-	b.StartTimer()
 	for i := b.N - 1; i >= 0; i-- {
 		z.SetBit(z, i&512, 0)
 	}
@@ -1445,7 +1453,6 @@ func BenchmarkBitsetOrig(b *testing.B) {
 	z := new(Int)
 	altSetBit(z, z, 512, 1)
 	b.ResetTimer()
-	b.StartTimer()
 	for i := b.N - 1; i >= 0; i-- {
 		altSetBit(z, z, i&512, 1)
 	}
@@ -1455,7 +1462,6 @@ func BenchmarkBitsetNegOrig(b *testing.B) {
 	z := NewInt(-1)
 	altSetBit(z, z, 512, 0)
 	b.ResetTimer()
-	b.StartTimer()
 	for i := b.N - 1; i >= 0; i-- {
 		altSetBit(z, z, i&512, 0)
 	}
@@ -1956,7 +1962,7 @@ func TestNewIntAllocs(t *testing.T) {
 	}
 }
 
-func TestToFloat64(t *testing.T) {
+func TestFloat64(t *testing.T) {
 	for _, test := range []struct {
 		istr string
 		f    float64
@@ -1992,7 +1998,7 @@ func TestToFloat64(t *testing.T) {
 		}
 
 		// Test against expectation.
-		f, acc := i.ToFloat64()
+		f, acc := i.Float64()
 		if f != test.f || acc != test.acc {
 			t.Errorf("%s: got %f (%s); want %f (%s)", test.istr, f, acc, test.f, test.acc)
 		}

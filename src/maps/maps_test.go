@@ -6,58 +6,12 @@ package maps
 
 import (
 	"math"
-	"sort"
 	"strconv"
 	"testing"
 )
 
-// TODO: replace with slices.Equal when slices is in GOROOT.
-func slicesEqual[E comparable](s1, s2 []E) bool {
-	if len(s1) != len(s2) {
-		return false
-	}
-	for i := range s1 {
-		if s1[i] != s2[i] {
-			return false
-		}
-	}
-	return true
-}
-
 var m1 = map[int]int{1: 2, 2: 4, 4: 8, 8: 16}
 var m2 = map[int]string{1: "2", 2: "4", 4: "8", 8: "16"}
-
-func TestKeys(t *testing.T) {
-	want := []int{1, 2, 4, 8}
-
-	got1 := Keys(m1)
-	sort.Ints(got1)
-	if !slicesEqual(got1, want) {
-		t.Errorf("Keys(%v) = %v, want %v", m1, got1, want)
-	}
-
-	got2 := Keys(m2)
-	sort.Ints(got2)
-	if !slicesEqual(got2, want) {
-		t.Errorf("Keys(%v) = %v, want %v", m2, got2, want)
-	}
-}
-
-func TestValues(t *testing.T) {
-	got1 := Values(m1)
-	want1 := []int{2, 4, 8, 16}
-	sort.Ints(got1)
-	if !slicesEqual(got1, want1) {
-		t.Errorf("Values(%v) = %v, want %v", m1, got1, want1)
-	}
-
-	got2 := Values(m2)
-	want2 := []string{"16", "2", "4", "8"}
-	sort.Strings(got2)
-	if !slicesEqual(got2, want2) {
-		t.Errorf("Values(%v) = %v, want %v", m2, got2, want2)
-	}
-}
 
 func TestEqual(t *testing.T) {
 	if !Equal(m1, m1) {
@@ -177,5 +131,112 @@ func TestDeleteFunc(t *testing.T) {
 	want := map[int]int{1: 2, 2: 4}
 	if !Equal(mc, want) {
 		t.Errorf("DeleteFunc result = %v, want %v", mc, want)
+	}
+}
+
+var n map[int]int
+
+func BenchmarkMapClone(b *testing.B) {
+	var m = make(map[int]int)
+	for i := 0; i < 1000000; i++ {
+		m[i] = i
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		n = Clone(m)
+	}
+}
+
+func TestCloneWithDelete(t *testing.T) {
+	var m = make(map[int]int)
+	for i := 0; i < 32; i++ {
+		m[i] = i
+	}
+	for i := 8; i < 32; i++ {
+		delete(m, i)
+	}
+	m2 := Clone(m)
+	if len(m2) != 8 {
+		t.Errorf("len2(m2) = %d, want %d", len(m2), 8)
+	}
+	for i := 0; i < 8; i++ {
+		if m2[i] != m[i] {
+			t.Errorf("m2[%d] = %d, want %d", i, m2[i], m[i])
+		}
+	}
+}
+
+func TestCloneWithMapAssign(t *testing.T) {
+	var m = make(map[int]int)
+	const N = 25
+	for i := 0; i < N; i++ {
+		m[i] = i
+	}
+	m2 := Clone(m)
+	if len(m2) != N {
+		t.Errorf("len2(m2) = %d, want %d", len(m2), N)
+	}
+	for i := 0; i < N; i++ {
+		if m2[i] != m[i] {
+			t.Errorf("m2[%d] = %d, want %d", i, m2[i], m[i])
+		}
+	}
+}
+
+func TestCloneLarge(t *testing.T) {
+	// See issue 64474.
+	type K [17]float64 // > 128 bytes
+	type V [17]float64
+
+	var zero float64
+	negZero := -zero
+
+	for tst := 0; tst < 3; tst++ {
+		// Initialize m with a key and value.
+		m := map[K]V{}
+		var k1 K
+		var v1 V
+		m[k1] = v1
+
+		switch tst {
+		case 0: // nothing, just a 1-entry map
+		case 1:
+			// Add more entries to make it 2 buckets
+			// 1 entry already
+			// 7 more fill up 1 bucket
+			// 1 more to grow to 2 buckets
+			for i := 0; i < 7+1; i++ {
+				m[K{float64(i) + 1}] = V{}
+			}
+		case 2:
+			// Capture the map mid-grow
+			// 1 entry already
+			// 7 more fill up 1 bucket
+			// 5 more (13 total) fill up 2 buckets
+			// 13 more (26 total) fill up 4 buckets
+			// 1 more to start the 4->8 bucket grow
+			for i := 0; i < 7+5+13+1; i++ {
+				m[K{float64(i) + 1}] = V{}
+			}
+		}
+
+		// Clone m, which should freeze the map's contents.
+		c := Clone(m)
+
+		// Update m with new key and value.
+		k2, v2 := k1, v1
+		k2[0] = negZero
+		v2[0] = 1.0
+		m[k2] = v2
+
+		// Make sure c still has its old key and value.
+		for k, v := range c {
+			if math.Signbit(k[0]) {
+				t.Errorf("tst%d: sign bit of key changed; got %v want %v", tst, k, k1)
+			}
+			if v != v1 {
+				t.Errorf("tst%d: value changed; got %v want %v", tst, v, v1)
+			}
+		}
 	}
 }

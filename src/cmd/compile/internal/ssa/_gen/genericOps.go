@@ -285,6 +285,12 @@ var genericOps = []opData{
 	{name: "Abs", argLength: 1},      // absolute value arg0
 	{name: "Copysign", argLength: 2}, // copy sign from arg0 to arg1
 
+	// Float min/max implementation, if hardware is available.
+	{name: "Min64F", argLength: 2}, // min(arg0,arg1)
+	{name: "Min32F", argLength: 2}, // min(arg0,arg1)
+	{name: "Max64F", argLength: 2}, // max(arg0,arg1)
+	{name: "Max32F", argLength: 2}, // max(arg0,arg1)
+
 	// 3-input opcode.
 	// Fused-multiply-add, float64 only.
 	// When a*b+c is exactly zero (before rounding), then the result is +0 or -0.
@@ -379,12 +385,13 @@ var genericOps = []opData{
 	{name: "StoreWB", argLength: 3, typ: "Mem", aux: "Typ"},    // Store arg1 to arg0. arg2=memory, aux=type.  Returns memory.
 	{name: "MoveWB", argLength: 3, typ: "Mem", aux: "TypSize"}, // arg0=destptr, arg1=srcptr, arg2=mem, auxint=size, aux=type.  Returns memory.
 	{name: "ZeroWB", argLength: 2, typ: "Mem", aux: "TypSize"}, // arg0=destptr, arg1=mem, auxint=size, aux=type. Returns memory.
+	{name: "WBend", argLength: 1, typ: "Mem"},                  // Write barrier code is done, interrupting is now allowed.
 
-	// WB invokes runtime.gcWriteBarrier. This is not a normal
+	// WB invokes runtime.gcWriteBarrier.  This is not a normal
 	// call: it takes arguments in registers, doesn't clobber
 	// general-purpose registers (the exact clobber set is
 	// arch-dependent), and is not a safe-point.
-	{name: "WB", argLength: 3, typ: "Mem", aux: "Sym", symEffect: "None"}, // arg0=destptr, arg1=srcptr, arg2=mem, aux=runtime.gcWriteBarrier
+	{name: "WB", argLength: 1, typ: "(BytePtr,Mem)", aux: "Int64"}, // arg0=mem, auxint=# of buffer entries needed. Returns buffer pointer and memory.
 
 	{name: "HasCPUFeature", argLength: 0, typ: "bool", aux: "Sym", symEffect: "None"}, // aux=place that this feature flag can be loaded from
 
@@ -470,7 +477,7 @@ var genericOps = []opData{
 	{name: "IsNonNil", argLength: 1, typ: "Bool"},        // arg0 != nil
 	{name: "IsInBounds", argLength: 2, typ: "Bool"},      // 0 <= arg0 < arg1. arg1 is guaranteed >= 0.
 	{name: "IsSliceInBounds", argLength: 2, typ: "Bool"}, // 0 <= arg0 <= arg1. arg1 is guaranteed >= 0.
-	{name: "NilCheck", argLength: 2, typ: "Void"},        // arg0=ptr, arg1=mem. Panics if arg0 is nil. Returns void.
+	{name: "NilCheck", argLength: 2, nilCheck: true},     // arg0=ptr, arg1=mem. Panics if arg0 is nil. Returns the ptr unmodified.
 
 	// Pseudo-ops
 	{name: "GetG", argLength: 1, zeroWidth: true}, // runtime.getg() (read g pointer). arg0=mem
@@ -642,6 +649,8 @@ var genericOps = []opData{
 //    Plain                []            [next]
 //       If   [boolean Value]      [then, else]
 //    First                []   [always, never]
+//    Defer             [mem]  [nopanic, panic]                  (control opcode should be OpStaticCall to runtime.deferproc)
+//JumpTable   [integer Value]  [succ1,succ2,..]
 
 var genericBlocks = []blockData{
 	{name: "Plain"},                  // a single successor
