@@ -2,4 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// need this empty asm file to enable linkname.
+//go:build cgo && windows && !internal
+
+package cgotest
+
+import "testing"
+
+func TestCallbackCallersSEH(t *testing.T) { testCallbackCallersSEH(t) }

@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cgo && windows
-
 package cgotest
 
 import "testing"
 
-func TestCallbackCallersSEH(t *testing.T) { testCallbackCallersSEH(t) }
+// Nothing to test here.
+// The test is that the package compiles at all.
+// See resstate.go.
+func Test(t *testing.T) {
+}
